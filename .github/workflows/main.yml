@@ -2,7 +2,8 @@ name: Terraform-AI-Review-Agent
 
 on:
   pull_request:
-    paths: "terraform-review-agent/**"
+    paths:
+      - "terraform-review-agent/**"
 
 jobs:
   terraform-ai-review:
