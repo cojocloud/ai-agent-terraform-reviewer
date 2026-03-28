@@ -33,24 +33,27 @@ def extract_relevant_findings(terrascan_results: dict) -> dict:
             "total_violations": summary.get("violated_policies", 0),
             "high": summary.get("high", 0),
             "medium": summary.get("medium", 0),
-            "low": summary.get("low", 0)
+            "low": summary.get("low", 0),
         },
-        "violations": []
+        "violations": [],
     }
 
     for v in violations:
-        structured["violations"].append({
-            "rule_id": v.get("rule_id"),
-            "rule_name": v.get("rule_name"),
-            "severity": v.get("severity"),
-            "description": v.get("description"),
-            "resource_type": v.get("resource_type"),
-            "resource_name": v.get("resource_name"),
-            "file": v.get("file"),
-            "line": v.get("line")
-        })
+        structured["violations"].append(
+            {
+                "rule_id": v.get("rule_id"),
+                "rule_name": v.get("rule_name"),
+                "severity": v.get("severity"),
+                "description": v.get("description"),
+                "resource_type": v.get("resource_type"),
+                "resource_name": v.get("resource_name"),
+                "file": v.get("file"),
+                "line": v.get("line"),
+            }
+        )
 
     return structured
+
 
 def build_prompt(findings: dict) -> str:
     return f"""
@@ -97,19 +100,13 @@ def call_gemini(prompt: str) -> str:
         f"{GEMINI_MODEL}:generateContent?key={api_key}"
     )
 
-    payload = {
-        "contents": [
-            {
-                "parts": [{"text": prompt}]
-            }
-        ]
-    }
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
-        method="POST"
+        method="POST",
     )
 
     try:
@@ -147,10 +144,7 @@ def lambda_handler(event, context):
     try:
         results = event.get("results")
         if not results:
-            return {
-                "statusCode": 400,
-                "error": "Missing Terrascan results in payload"
-            }
+            return {"statusCode": 400, "error": "Missing Terrascan results in payload"}
 
         findings = extract_relevant_findings(results)
         prompt = build_prompt(findings)
@@ -160,14 +154,10 @@ def lambda_handler(event, context):
 
         return {
             "statusCode": 200,
-            "verdict": verdict,                     # ✅ structured decision
-            "summary": findings["summary"],         # useful for logs
-            "ai_review": ai_review                  # human-readable report
+            "verdict": verdict,  # ✅ structured decision
+            "summary": findings["summary"],  # useful for logs
+            "ai_review": ai_review,  # human-readable report
         }
 
     except Exception as e:
-        return {
-            "statusCode": 500,
-            "verdict": "REJECT",                     # fail closed
-            "error": str(e)
-        }
+        return {"statusCode": 500, "verdict": "REJECT", "error": str(e)}  # fail closed
