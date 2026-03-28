@@ -166,23 +166,3 @@ aws s3 rb s3://pravesh-terraform-mario-state
 ```
 
 ---
-
-## 📖 Blog & Demo
-
-📘 Blog:
-👉 [https://dev.to/aws-builders/how-i-built-an-ai-terraform-review-agent-on-serverless-aws-43hc](https://dev.to/aws-builders/how-i-built-an-ai-terraform-review-agent-on-serverless-aws-43hc)
-
-🎥 Video demo coming soon on YouTube!
-
----
-
-## 🙌 Author
-
-**Pravesh Sudha**
-
-* 🌐 [https://praveshsudha.com](https://praveshsudha.com)
-* 💼 LinkedIn: [https://www.linkedin.com/in/pravesh-sudha/](https://www.linkedin.com/in/pravesh-sudha/)
-* 🐦 X/Twitter: [https://x.com/praveshstwt](https://x.com/praveshstwt)
-* ▶️ YouTube: [https://www.youtube.com/@pravesh-sudha](https://www.youtube.com/@pravesh-sudha)
-
----

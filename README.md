@@ -73,22 +73,3 @@ Each project folder contains:
 Clone, explore, break things, rebuild — that’s the goal.
 
 ---
-
-## 🧑‍💻 About Me
-
-I’m **Pravesh Sudha**, a DevOps engineer focused on:
-
-* Cloud automation
-* Open-source
-* Practical learning through projects
-
-I document everything so others can learn faster.
-
----
-
-## 🔗 Connect With Me
-
-* 🌐 Website: [https://praveshsudha.com](https://praveshsudha.com)
-* 💼 LinkedIn: [https://www.linkedin.com/in/pravesh-sudha/](https://www.linkedin.com/in/pravesh-sudha/)
-* 🐦 X/Twitter: [https://x.com/praveshstwt](https://x.com/praveshstwt)
-* ▶️ YouTube: [https://www.youtube.com/@pravesh-sudha](https://www.youtube.com/@pravesh-sudha)
