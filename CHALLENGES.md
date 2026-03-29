@@ -221,3 +221,153 @@ The Lambda response on REJECT now includes:
   "ai_review": "..."
 }
 ```
+
+---
+
+## Challenge 6 — Lambda Always Returned REJECT Regardless of Actual Findings
+
+### Symptom
+Every PR was rejected by the AI agent even after the HTTPS listener was correctly added to the Terraform code. The verdict never changed to `APPROVE` or `APPROVE_WITH_CHANGES`.
+
+### Root Cause
+The `extract_verdict` function searched the **entire** Gemini response text for the word `"REJECT"`:
+
+```python
+if "FINAL VERDICT" in text:
+    if "REJECT" in text:   # searches the whole response, not just the verdict line
+        return "REJECT"
+```
+
+Gemini echoes back the decision policy as part of its reasoning (e.g. *"REJECT if any HIGH severity finding exists..."*), so the word `"REJECT"` was almost always present in the full response — regardless of the actual verdict at the end.
+
+### Fix
+Replaced the full-text scan with a regex anchored to the `"Final verdict:"` line, so only the word immediately following that label is read:
+
+```python
+match = re.search(
+    r"final\s+verdict[^:\n]*:\s*\*{0,2}(APPROVE_WITH_CHANGES|APPROVE|REJECT)\*{0,2}",
+    review_text,
+    re.IGNORECASE,
+)
+if match:
+    return match.group(1).upper()
+return "REJECT"  # fail-safe
+```
+
+**Lesson:** When extracting a structured field from an LLM response, always anchor the search to the specific label. A broad `"word in full_text"` check will match anywhere the word appears — including in the model's reasoning, examples, or policy descriptions.
+
+---
+
+## Challenge 7 — Lambda Returning 500 AccessDeniedException
+
+### Symptom
+Lambda returned a 500 error on every invocation:
+
+```json
+{
+  "statusCode": 500,
+  "verdict": "REJECT",
+  "error": "An error occurred (AccessDeniedException) when calling the GetSecretValue
+  operation: User: arn:aws:sts::...:assumed-role/terraform-ai-review-agent-role/...
+  is not authorized to perform: secretsmanager:GetSecretValue on resource: gemini-api-key-5"
+}
+```
+
+The `ai_review` field was `null`, so the workflow printed fallback messages instead of real output.
+
+### Root Cause
+A name mismatch between the secret name hardcoded in the Lambda and the secret actually created by Terraform:
+
+| Location | Secret name |
+|---|---|
+| `lambda_function.py` | `gemini-api-key-5` |
+| `secrets.tf` (Terraform-managed) | `gemini-api-key0` |
+| IAM policy resource | `aws_secretsmanager_secret.gemini_api_key0.arn` |
+
+The Lambda was requesting a secret that did not exist and was not covered by the IAM policy.
+
+### Fix
+Updated the constant in `lambda_function.py` to match the Terraform-managed secret name:
+
+```python
+SECRET_NAME = "gemini-api-key0"
+```
+
+**Lesson:** Secret names used in application code must exactly match the names defined in infrastructure code. A mismatch causes a silent 500 at runtime because the IAM policy ARN scopes access to the specific secret ARN, not a wildcard.
+
+---
+
+## Challenge 8 — Gemini Markdown Formatting Breaking Section Extraction
+
+### Symptom
+Lambda returned `verdict: REJECT` but `rejection_reason` and `remediation` were `null`, causing the workflow to print fallback messages:
+
+```
+Reason:      See ai_review for details
+Remediation: No remediation provided
+```
+
+### Root Cause
+Gemini wraps section headers in markdown bold formatting: `**REJECTION_REASON:**`. The `_extract_section` parser checked for a plain string match:
+
+```python
+if line.strip().upper().startswith(section_header.upper() + ":"):
+```
+
+`**REJECTION_REASON:**` starts with `**`, not `REJECTION_REASON`, so the match always failed and the function returned `None`.
+
+### Fix
+Strip markdown bold/italic markers before matching:
+
+```python
+clean = re.sub(r"\*+", "", line).strip()
+if clean.upper().startswith(section_header.upper() + ":"):
+```
+
+**Lesson:** LLMs apply markdown formatting inconsistently. Any parser that reads structured sections from AI output must normalise the text first — at minimum stripping `*`, `_`, `#`, and surrounding whitespace before comparing headers.
+
+---
+
+## Challenge 9 — Terrascan Violations-Only Output Causing False REJECT
+
+### Symptom
+The pipeline rejected PRs with the reason "ALB has no HTTPS listener" even though `aws_lb_listener.https` was correctly defined in the Terraform code with `protocol = "HTTPS"` on port 443.
+
+### Root Cause
+Terrascan is a **violations-only reporter**. Correctly configured resources produce no output and are invisible to Gemini. The only ALB listener that appeared in the Terrascan JSON was `aws_lb_listener.http` (the port 80 redirect), flagged by rule `AC_AWS_0491` (`listenerNotHttps`).
+
+Gemini received:
+- One finding: `aws_lb_listener.http` is not HTTPS
+- Zero findings for: `aws_lb_listener.https` (because it was correctly configured)
+
+With no evidence that an HTTPS listener existed, Gemini correctly (from its limited perspective) concluded the ALB had no HTTPS and applied the rejection rule.
+
+Prompt-level workarounds (telling Gemini to "ignore AC_AWS_0491 on redirect listeners") did not work because Gemini had no way to distinguish a redirect listener from a plain HTTP listener using only the violations list.
+
+### Fix
+The workflow was updated to grep the actual Terraform files for HTTPS listener count and inject this as verified context into the Lambda payload:
+
+```yaml
+- name: Build Lambda payload with Terraform context
+  run: |
+    HTTPS_LISTENERS=$(grep -rE 'protocol\s*=\s*"HTTPS"' terraform-review-agent/terraform/*.tf | wc -l | tr -d ' ')
+    HTTP_REDIRECTS=$(grep -rA5 'port\s*=\s*"?80"?' terraform-review-agent/terraform/*.tf | grep -c 'redirect' || true)
+
+    jq --argjson https "$HTTPS_LISTENERS" --argjson redirects "$HTTP_REDIRECTS" \
+      '. + {"terraform_context": {"https_listener_count": $https, "http_redirect_count": $redirects}}' \
+      terrascan_report.json > payload.json
+```
+
+The Lambda reads this context and injects it at the top of the Gemini prompt as authoritative ground truth:
+
+```python
+if https_count > 0:
+    https_status = (
+        f"VERIFIED: The Terraform code contains {https_count} HTTPS listener(s). "
+        f"The ALB IS correctly secured. AC_AWS_0491 on HTTP redirect listeners are false positives."
+    )
+```
+
+Gemini now sees the verified listener count before evaluating any Terrascan findings, and the `AC_AWS_0491` false positive can no longer override it.
+
+**Lesson:** Static analysis tools report what is wrong, not what is right. When an LLM reasons from violations-only output, the absence of a finding does not mean the absence of a resource — it means the resource is compliant. For binary security properties (HTTPS exists / does not exist), inject ground truth from the source code directly rather than relying on the absence of a violation as proof of compliance.
