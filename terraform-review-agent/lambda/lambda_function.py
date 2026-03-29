@@ -1,4 +1,5 @@
 import json
+import re
 import urllib.request
 import urllib.error
 import boto3
@@ -133,18 +134,17 @@ def call_gemini(prompt: str) -> str:
 
 def extract_verdict(review_text: str) -> str:
     """
-    Extracts verdict from Gemini response.
-    Defaults to REJECT if unclear (fail-safe).
+    Extracts the verdict from the line immediately following 'Final verdict:'.
+    Uses regex so the decision policy text (which also contains REJECT/APPROVE)
+    cannot pollute the result.  Defaults to REJECT if the pattern is not found.
     """
-    text = review_text.upper()
-
-    if "FINAL VERDICT" in text:
-        if "REJECT" in text:
-            return "REJECT"
-        if "APPROVE_WITH_CHANGES" in text:
-            return "APPROVE_WITH_CHANGES"
-        if "APPROVE" in text:
-            return "APPROVE"
+    match = re.search(
+        r"final\s+verdict[^:\n]*:\s*\*{0,2}(APPROVE_WITH_CHANGES|APPROVE|REJECT)\*{0,2}",
+        review_text,
+        re.IGNORECASE,
+    )
+    if match:
+        return match.group(1).upper()
 
     # Fail-safe: never allow silent approval
     return "REJECT"
