@@ -56,31 +56,41 @@ def extract_relevant_findings(terrascan_results: dict) -> dict:
     return structured
 
 
-def build_prompt(findings: dict) -> str:
+def build_prompt(findings: dict, terraform_context: dict) -> str:
+    https_count = terraform_context.get("https_listener_count", 0)
+    redirect_count = terraform_context.get("http_redirect_count", 0)
+
+    if https_count > 0:
+        https_status = (
+            f"VERIFIED: The Terraform code contains {https_count} HTTPS listener(s) "
+            f"and {redirect_count} HTTP→HTTPS redirect listener(s). "
+            f"The ALB IS correctly secured with HTTPS. "
+            f"AC_AWS_0491 violations on HTTP redirect listeners are false positives — ignore them."
+        )
+    else:
+        https_status = (
+            "VERIFIED: No HTTPS listener found in the Terraform code. "
+            "The ALB is NOT secured with HTTPS. Apply the 'no HTTPS listener' rejection rule."
+        )
+
     return f"""
 You are a senior DevOps and Terraform security reviewer acting as a CI/CD security gate.
 
 Your task is to analyze Terrascan findings and decide whether the infrastructure
 can be deployed based on **risk thresholds**, not perfection.
 
+VERIFIED TERRAFORM CONTEXT (authoritative — use this to override Terrascan inferences):
+{https_status}
+
 Decision Policy (STRICT)
 - REJECT if:
   - Any HIGH or CRITICAL severity issue exists
   - OR MEDIUM severity issues ≥ 4
-  - OR Application Load Balancer has **no HTTPS listener at all** (no resource with protocol = "HTTPS" on port 443)
+  - OR Application Load Balancer has no HTTPS listener (use the VERIFIED CONTEXT above, not Terrascan AC_AWS_0491)
 - APPROVE_WITH_CHANGES if:
   - MEDIUM severity issues are 1–3
 - APPROVE if:
   - Only LOW or INFO issues exist
-
-HTTPS Listener Evaluation Rule (IMPORTANT)
-Terrascan rule AC_AWS_0491 (listenerNotHttps) fires on EVERY non-HTTPS listener,
-including HTTP→HTTPS redirect listeners (port 80). This is a known false positive.
-- If the Terraform contains BOTH an HTTP listener (port 80 redirect to 443) AND an
-  HTTPS listener (port 443, protocol = HTTPS), the ALB is correctly secured.
-  Do NOT treat this as "no HTTPS listener". Ignore AC_AWS_0491 on the HTTP redirect listener.
-- Only trigger the "no HTTPS listener" rejection if there is genuinely no listener
-  with protocol = "HTTPS" anywhere on the ALB.
 
 Output Format
 Provide the following sections IN ORDER and use the exact headings shown:
@@ -203,8 +213,9 @@ def lambda_handler(event, context):
         if not results:
             return {"statusCode": 400, "error": "Missing Terrascan results in payload"}
 
+        terraform_context = event.get("terraform_context", {})
         findings = extract_relevant_findings(results)
-        prompt = build_prompt(findings)
+        prompt = build_prompt(findings, terraform_context)
 
         ai_review = call_gemini(prompt)
         verdict = extract_verdict(ai_review)

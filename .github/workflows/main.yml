@@ -42,11 +42,29 @@ jobs:
             > terrascan_report.json
           set -e
 
+      - name: Build Lambda payload with Terraform context
+        run: |
+          TF_DIR="terraform-review-agent/terraform"
+
+          # Count HTTPS listeners (protocol = "HTTPS") in terraform files
+          HTTPS_LISTENERS=$(grep -rE 'protocol\s*=\s*"HTTPS"' "$TF_DIR"/*.tf 2>/dev/null | wc -l | tr -d ' ')
+
+          # Count HTTP->HTTPS redirect listeners
+          HTTP_REDIRECTS=$(grep -rA5 'port\s*=\s*"?80"?' "$TF_DIR"/*.tf 2>/dev/null | grep -c 'redirect' || true)
+
+          echo "HTTPS listeners found: $HTTPS_LISTENERS"
+          echo "HTTP redirect listeners found: $HTTP_REDIRECTS"
+
+          # Inject context into the payload alongside Terrascan results
+          jq --argjson https "$HTTPS_LISTENERS" --argjson redirects "$HTTP_REDIRECTS" \
+            '. + {"terraform_context": {"https_listener_count": $https, "http_redirect_count": $redirects}}' \
+            terrascan_report.json > payload.json
+
       - name: Upload Terrascan Report
         uses: actions/upload-artifact@v4
         with:
           name: terrascan-report
-          path: terrascan_report.json  
+          path: terrascan_report.json
 
       - name: Invoke Terraform AI Review Lambda
         id: ai_review
@@ -54,7 +72,7 @@ jobs:
           aws lambda invoke \
             --function-name terraform-ai-review-agent \
             --cli-binary-format raw-in-base64-out \
-            --payload file://terrascan_report.json \
+            --payload file://payload.json \
             response.json
           echo "=== Full Lambda Response ==="
           jq '.' response.json
