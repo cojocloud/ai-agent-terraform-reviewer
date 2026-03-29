@@ -5,7 +5,7 @@ import urllib.error
 import boto3
 
 GEMINI_MODEL = "gemini-2.5-flash"
-SECRET_NAME = "gemini-api-key-5"
+SECRET_NAME = "gemini-api-key0"
 REGION_NAME = "us-east-1"
 
 GEMINI_API_KEY = None
@@ -56,18 +56,37 @@ def extract_relevant_findings(terrascan_results: dict) -> dict:
     return structured
 
 
-def build_prompt(findings: dict) -> str:
+def build_prompt(findings: dict, terraform_context: dict) -> str:
+    https_count = terraform_context.get("https_listener_count", 0)
+    redirect_count = terraform_context.get("http_redirect_count", 0)
+
+    if https_count > 0:
+        https_status = (
+            f"VERIFIED: The Terraform code contains {https_count} HTTPS listener(s) "
+            f"and {redirect_count} HTTP→HTTPS redirect listener(s). "
+            f"The ALB IS correctly secured with HTTPS. "
+            f"AC_AWS_0491 violations on HTTP redirect listeners are false positives — ignore them."
+        )
+    else:
+        https_status = (
+            "VERIFIED: No HTTPS listener found in the Terraform code. "
+            "The ALB is NOT secured with HTTPS. Apply the 'no HTTPS listener' rejection rule."
+        )
+
     return f"""
 You are a senior DevOps and Terraform security reviewer acting as a CI/CD security gate.
 
 Your task is to analyze Terrascan findings and decide whether the infrastructure
 can be deployed based on **risk thresholds**, not perfection.
 
+VERIFIED TERRAFORM CONTEXT (authoritative — use this to override Terrascan inferences):
+{https_status}
+
 Decision Policy (STRICT)
 - REJECT if:
   - Any HIGH or CRITICAL severity issue exists
   - OR MEDIUM severity issues ≥ 4
-  - OR Application Load Balancer has **no HTTPS listener at all**
+  - OR Application Load Balancer has no HTTPS listener (use the VERIFIED CONTEXT above, not Terrascan AC_AWS_0491)
 - APPROVE_WITH_CHANGES if:
   - MEDIUM severity issues are 1–3
 - APPROVE if:
@@ -154,16 +173,20 @@ def _extract_section(review_text: str, section_header: str) -> str | None:
     """
     Extracts the text content that follows `section_header:` up to the next
     blank line or end of string.  Returns None if the header is not found.
+    Strips markdown bold/italic markers (**) before matching so Gemini's
+    formatted output (e.g. **REJECTION_REASON:**) is handled correctly.
     """
     lines = review_text.splitlines()
     result_lines = []
     capturing = False
 
     for line in lines:
-        if line.strip().upper().startswith(section_header.upper() + ":"):
+        # Remove markdown bold/italic so **HEADER:** matches as HEADER:
+        clean = re.sub(r"\*+", "", line).strip()
+
+        if clean.upper().startswith(section_header.upper() + ":"):
             capturing = True
-            # Inline content on the same line as the header
-            inline = line.split(":", 1)[1].strip()
+            inline = clean.split(":", 1)[1].strip()
             if inline:
                 result_lines.append(inline)
             continue
@@ -190,8 +213,9 @@ def lambda_handler(event, context):
         if not results:
             return {"statusCode": 400, "error": "Missing Terrascan results in payload"}
 
+        terraform_context = event.get("terraform_context", {})
         findings = extract_relevant_findings(results)
-        prompt = build_prompt(findings)
+        prompt = build_prompt(findings, terraform_context)
 
         ai_review = call_gemini(prompt)
         verdict = extract_verdict(ai_review)
