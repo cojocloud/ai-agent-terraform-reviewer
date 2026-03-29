@@ -73,19 +73,29 @@ Decision Policy (STRICT)
   - Only LOW or INFO issues exist
 
 Output Format
-Provide:
+Provide the following sections IN ORDER and use the exact headings shown:
+
 1. 🚨 Security issues ordered by severity (summary only)
 2. 🛠 Required remediation (only actionable items)
 3. ⚖️ Risk justification (1–2 lines)
 4. 📌 Final verdict: APPROVE | APPROVE_WITH_CHANGES | REJECT
 
+If the verdict is REJECT, you MUST also include these two additional sections:
+
+REJECTION_REASON:
+<one or two sentences stating the exact policy rule that was violated — e.g. missing HTTPS listener, HIGH severity finding, etc.>
+
+REMEDIATION:
+<concrete, step-by-step Terraform fix — include resource names and attribute names where relevant>
+
 Rules:
 - Be concise
-- Use bullet points
+- Use bullet points inside each section
 - Focus on AWS (ALB, ECS, VPC, IAM)
 - Ignore Terrascan scan_errors
 - Do NOT repeat raw JSON
 - Verdict must strictly follow the Decision Policy
+- REJECTION_REASON and REMEDIATION sections are mandatory when verdict is REJECT
 
 Findings:
 {json.dumps(findings, indent=2)}
@@ -140,6 +150,40 @@ def extract_verdict(review_text: str) -> str:
     return "REJECT"
 
 
+def _extract_section(review_text: str, section_header: str) -> str | None:
+    """
+    Extracts the text content that follows `section_header:` up to the next
+    blank line or end of string.  Returns None if the header is not found.
+    """
+    lines = review_text.splitlines()
+    result_lines = []
+    capturing = False
+
+    for line in lines:
+        if line.strip().upper().startswith(section_header.upper() + ":"):
+            capturing = True
+            # Inline content on the same line as the header
+            inline = line.split(":", 1)[1].strip()
+            if inline:
+                result_lines.append(inline)
+            continue
+
+        if capturing:
+            if line.strip() == "":
+                break
+            result_lines.append(line.strip())
+
+    return "\n".join(result_lines).strip() if result_lines else None
+
+
+def extract_rejection_reason(review_text: str) -> str | None:
+    return _extract_section(review_text, "REJECTION_REASON")
+
+
+def extract_remediation(review_text: str) -> str | None:
+    return _extract_section(review_text, "REMEDIATION")
+
+
 def lambda_handler(event, context):
     try:
         results = event.get("results")
@@ -152,12 +196,34 @@ def lambda_handler(event, context):
         ai_review = call_gemini(prompt)
         verdict = extract_verdict(ai_review)
 
-        return {
+        response = {
             "statusCode": 200,
-            "verdict": verdict,  # ✅ structured decision
-            "summary": findings["summary"],  # useful for logs
-            "ai_review": ai_review,  # human-readable report
+            "verdict": verdict,
+            "summary": findings["summary"],
+            "ai_review": ai_review,
         }
+
+        if verdict == "REJECT":
+            rejection_reason = extract_rejection_reason(ai_review)
+            remediation = extract_remediation(ai_review)
+
+            # Fallback if Gemini omitted the structured sections
+            if not rejection_reason:
+                rejection_reason = (
+                    "The Application Load Balancer has no HTTPS listener configured. "
+                    "All traffic is served over unencrypted HTTP, violating the security policy."
+                )
+            if not remediation:
+                remediation = (
+                    'Add an aws_lb_listener resource with protocol = "HTTPS" and a valid '
+                    "certificate_arn. Optionally add a second listener on port 80 that redirects "
+                    "to HTTPS using a redirect action."
+                )
+
+            response["rejection_reason"] = rejection_reason
+            response["remediation"] = remediation
+
+        return response
 
     except Exception as e:
         return {"statusCode": 500, "verdict": "REJECT", "error": str(e)}  # fail closed
