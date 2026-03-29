@@ -63,9 +63,20 @@ jobs:
           VERDICT=$(jq -r '.verdict' response.json)
 
           echo "🧠 AI Verdict: $VERDICT"
+          echo ""
 
           if [[ "$VERDICT" == "REJECT" ]]; then
-            echo "❌ AI Agent rejected Terraform changes"
+            REASON=$(jq -r '.rejection_reason // "See ai_review for details"' response.json)
+            REMEDIATION=$(jq -r '.remediation // "No remediation provided"' response.json)
+
+            echo "❌ PR REJECTED"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Reason:"
+            echo "  $REASON"
+            echo ""
+            echo "Remediation:"
+            echo "  $REMEDIATION"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             exit 1
           else
             echo "✅ AI Agent approved (or approved with changes)"
