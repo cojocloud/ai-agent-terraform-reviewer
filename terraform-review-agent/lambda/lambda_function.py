@@ -154,16 +154,20 @@ def _extract_section(review_text: str, section_header: str) -> str | None:
     """
     Extracts the text content that follows `section_header:` up to the next
     blank line or end of string.  Returns None if the header is not found.
+    Strips markdown bold/italic markers (**) before matching so Gemini's
+    formatted output (e.g. **REJECTION_REASON:**) is handled correctly.
     """
     lines = review_text.splitlines()
     result_lines = []
     capturing = False
 
     for line in lines:
-        if line.strip().upper().startswith(section_header.upper() + ":"):
+        # Remove markdown bold/italic so **HEADER:** matches as HEADER:
+        clean = re.sub(r"\*+", "", line).strip()
+
+        if clean.upper().startswith(section_header.upper() + ":"):
             capturing = True
-            # Inline content on the same line as the header
-            inline = line.split(":", 1)[1].strip()
+            inline = clean.split(":", 1)[1].strip()
             if inline:
                 result_lines.append(inline)
             continue
