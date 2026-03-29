@@ -67,11 +67,20 @@ Decision Policy (STRICT)
 - REJECT if:
   - Any HIGH or CRITICAL severity issue exists
   - OR MEDIUM severity issues ≥ 4
-  - OR Application Load Balancer has **no HTTPS listener at all**
+  - OR Application Load Balancer has **no HTTPS listener at all** (no resource with protocol = "HTTPS" on port 443)
 - APPROVE_WITH_CHANGES if:
   - MEDIUM severity issues are 1–3
 - APPROVE if:
   - Only LOW or INFO issues exist
+
+HTTPS Listener Evaluation Rule (IMPORTANT)
+Terrascan rule AC_AWS_0491 (listenerNotHttps) fires on EVERY non-HTTPS listener,
+including HTTP→HTTPS redirect listeners (port 80). This is a known false positive.
+- If the Terraform contains BOTH an HTTP listener (port 80 redirect to 443) AND an
+  HTTPS listener (port 443, protocol = HTTPS), the ALB is correctly secured.
+  Do NOT treat this as "no HTTPS listener". Ignore AC_AWS_0491 on the HTTP redirect listener.
+- Only trigger the "no HTTPS listener" rejection if there is genuinely no listener
+  with protocol = "HTTPS" anywhere on the ALB.
 
 Output Format
 Provide the following sections IN ORDER and use the exact headings shown:
